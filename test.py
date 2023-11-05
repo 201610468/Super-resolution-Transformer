@@ -10,12 +10,12 @@ from model import  esrt
 # Testing settings
 
 parser = argparse.ArgumentParser(description='ESRT')
-parser.add_argument("--test_hr_folder", type=str, default='./Test_Datasets/field/image_SRF_2/',
+parser.add_argument("--test_hr_folder", type=str, default='./Test_Datasets/synthetic_test/image_SRF_2/',
                     help='the folder of the target images')
-parser.add_argument("--test_lr_folder", type=str, default='./Test_Datasets/field_LR/x2/',
+parser.add_argument("--test_lr_folder", type=str, default='./Test_Datasets/synthetic_test_LR/x2/',
                     help='the folder of the input images')
-parser.add_argument("--output_folder", type=str, default='./result/mytest/set5/x2/')
-parser.add_argument("--checkpoint", type=str, default='./experiment/checkpoint_ESRT_x2/epoch_90.pth',
+parser.add_argument("--output_folder", type=str, default='./result/mytest/synthetic/x2/')
+parser.add_argument("--checkpoint", type=str, default='./experiment/checkpoint_ESRT_x2/epoch_100.pth',
                     help='checkpoint folder to use')
 parser.add_argument('--cuda', action='store_true', default=True,
                     help='use cuda')
@@ -43,6 +43,7 @@ def forward_chop(model, x, shave=10, min_size=60000):
         for i in range(0, 4, n_GPUs):
             lr_batch = torch.cat(lr_list[i:(i + n_GPUs)], dim=0)
             sr_batch = model(lr_batch)
+            #print(sr_batch.shape)
             sr_list.extend(sr_batch.chunk(n_GPUs, dim=0))
     else:
         sr_list = [
@@ -64,7 +65,7 @@ def forward_chop(model, x, shave=10, min_size=60000):
         = sr_list[2][:, :, (h_size - h + h_half):h_size, 0:w_half]
     output[:, :, h_half:h, w_half:w] \
         = sr_list[3][:, :, (h_size - h + h_half):h_size, (w_size - w + w_half):w_size]
-
+    
     return output
 cuda = opt.cuda
 device = torch.device('cuda' if cuda else 'cpu')
@@ -77,7 +78,6 @@ filepath = opt.test_hr_folder
 ext='.npy'
 
 filelist = utils.get_list(filepath, ext=ext)
-print('filelist :', filelist)
 psnr_list = np.zeros(len(filelist))
 ssim_list = np.zeros(len(filelist))
 time_list = np.zeros(len(filelist))
@@ -93,47 +93,49 @@ end = torch.cuda.Event(enable_timing=True)
 for imname in filelist:
     im_gt = np.load(imname)
     # im_gt = cv2.imread(imname, cv2.IMREAD_COLOR)[:, :, [2, 1, 0]]  # BGR to RGB
-    im_gt = utils.modcrop(im_gt, opt.upscale_factor)
+    #im_gt = utils.modcrop(im_gt, opt.upscale_factor)
+    
     # im_l = cv2.imread(opt.test_lr_folder + imname.split('/')[-1].split('.')[0].split('_HR')[0] + '_LR' + ext, cv2.IMREAD_COLOR)[:, :, [2, 1, 0]]  # BGR to RGB
     im_l = np.load(opt.test_lr_folder + imname.split('/')[-1].split('.')[0].split('_HR')[0] + ext)
-
     if len(im_gt.shape) < 3:
         print('True')
         im_gt = im_gt[..., np.newaxis]
-        print('im_gt :',im_gt.shape)
+
         im_gt = np.concatenate([im_gt] * 3, 2)
-        print(im_gt.shape)
+
         im_l = im_l[..., np.newaxis]
         im_l = np.concatenate([im_l] * 3, 2)
-    im_input = im_l / 255.0
+    im_input = im_l #/ 255.0
     im_input = np.transpose(im_input, (2, 0, 1))
     im_input = im_input[np.newaxis, ...]
     im_input = torch.from_numpy(im_input).float()
-    print('im_gt :',im_gt.shape)
-    print('im_input :',im_input.shape)
+
     if cuda:
         model = model.to(device)
         im_input = im_input.to(device)
 
     with torch.no_grad():
         start.record()
-        out = forward_chop(model, im_input) #model(im_input)
+        out = model(im_input)
+        #out = forward_chop(model, im_input) #model(im_input)
         end.record()
         torch.cuda.synchronize()
         time_list[i] = start.elapsed_time(end)  # milliseconds
 
     out_img = utils.tensor2np(out.detach()[0])
     crop_size = opt.upscale_factor
-    cropped_sr_img = utils.shave(out_img, crop_size)
-    cropped_gt_img = utils.shave(im_gt, crop_size)
+    # cropped_sr_img = utils.shave(out_img, crop_size)
+    # cropped_gt_img = utils.shave(im_gt, crop_size)
     if opt.is_y is False:
         im_label = utils.quantize(sc.rgb2ycbcr(cropped_gt_img)[:, :, 0])
         im_pre = utils.quantize(sc.rgb2ycbcr(cropped_sr_img)[:, :, 0])
     else:
-        im_label = cropped_gt_img
-        im_pre = cropped_sr_img
-    psnr_list[i] = utils.compute_psnr(im_pre, im_label)
-    ssim_list[i] = utils.compute_ssim(im_pre, im_label)
+        im_label = im_gt
+        #print(im_label.shape)
+        im_pre = out_img
+        #print(im_pre.shape)
+    #psnr_list[i] = utils.compute_psnr(im_pre, im_label)
+    #ssim_list[i] = utils.compute_ssim(im_pre, im_label)
 
 
     output_folder = os.path.join(opt.output_folder,
@@ -148,3 +150,4 @@ for imname in filelist:
 
 
 print("Mean PSNR: {}, SSIM: {}, TIME: {} ms".format(np.mean(psnr_list), np.mean(ssim_list), np.mean(time_list)))
+
