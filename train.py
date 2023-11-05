@@ -11,6 +11,8 @@ import random
 from collections import OrderedDict
 import datetime
 from importlib import import_module
+import pickle
+from torchsummary import summary
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
 # Training settings
@@ -19,11 +21,11 @@ parser.add_argument("--batch_size", type=int, default=16,
                     help="training batch size")
 parser.add_argument("--testBatchSize", type=int, default=1,
                     help="testing batch size")
-parser.add_argument("-nEpochs", type=int, default=1000,
+parser.add_argument("-nEpochs", type=int, default=100,
                     help="number of epochs to train")
 parser.add_argument("--lr", type=float, default=2e-4,
                     help="Learning Rate. Default=2e-4")
-parser.add_argument("--step_size", type=int, default=200,
+parser.add_argument("--step_size", type=int, default=25,
                     help="learning rate decay per N epochs")
 parser.add_argument("--gamma", type=int, default=0.5,
                     help="learning rate decay factor for step decay")
@@ -37,11 +39,11 @@ parser.add_argument("--threads", type=int, default=8,
                     help="number of threads for data loading")
 parser.add_argument("--root", type=str, default="./dataset/",
                     help='dataset directory')
-parser.add_argument("--n_train", type=int, default=800,
+parser.add_argument("--n_train", type=int, default=160,
                     help="number of training set")
 parser.add_argument("--n_val", type=int, default=1,
                     help="number of validation set")
-parser.add_argument("--test_every", type=int, default=1000)
+parser.add_argument("--test_every", type=int, default=10)
 parser.add_argument("--scale", type=int, default=2,
                     help="super-resolution scale")
 parser.add_argument("--patch_size", type=int, default=128,
@@ -75,8 +77,8 @@ device = torch.device('cuda' if cuda else 'cpu')
 print("===> Loading datasets")
 
 trainset = DIV2K.div2k(args)
-testset = validation.DatasetFromFolderVal("Test_Datasets/field/image_SRF_{}/".format(args.scale),
-                                       "Test_Datasets/field_LR/x{}/".format(args.scale),
+testset = validation.DatasetFromFolderVal("Test_Datasets/validation/image_SRF_{}/".format(args.scale),
+                                       "Test_Datasets/validation_LR/x{}/".format(args.scale),
                                        args.scale)
 training_data_loader = DataLoader(dataset=trainset, num_workers=args.threads, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
 testing_data_loader = DataLoader(dataset=testset, num_workers=args.threads, batch_size=args.testBatchSize,
@@ -97,6 +99,7 @@ if cuda:
     model = model.to(device)
     l1_criterion = l1_criterion.to(device)
 
+summary(model,(1,128,128))
 if args.pretrained:
 
     if os.path.isfile(args.pretrained):
@@ -124,11 +127,11 @@ print("===> Setting Optimizer")
 
 optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-
 def train(epoch):
     model.train()
     utils.adjust_learning_rate(optimizer, epoch, args.step_size, args.lr, args.gamma)
     print('epoch =', epoch, 'lr = ', optimizer.param_groups[0]['lr'])
+    
     for iteration, (lr_tensor, hr_tensor) in enumerate(training_data_loader, 1):
 
         if args.cuda:
@@ -139,12 +142,15 @@ def train(epoch):
         sr_tensor = model(lr_tensor)
         loss_l1 = l1_criterion(sr_tensor, hr_tensor)
         loss_sr = loss_l1
-
+        if iteration == len(training_data_loader):
+            loss_L1.append(loss_l1.item())
         loss_sr.backward()
         optimizer.step()
         if iteration % 100 == 0:
             print("===> Epoch[{}]({}/{}): Loss_l1: {:.5f}".format(epoch, iteration, len(training_data_loader),
                                                                   loss_l1.item()))
+
+
 def forward_chop(model, x, scale, shave=10, min_size=60000):
     #scale = scale#self.scale[self.idx_scale]
     n_GPUs = 1#min(self.n_GPUs, 4)
@@ -207,15 +213,18 @@ def valid(scale):
             hr_tensor = hr_tensor.to(device)
 
         with torch.no_grad():
-            pre = forward_chop(model, lr_tensor, scale)#model(lr_tensor)
+            #pre = forward_chop(model, lr_tensor, scale)#model(lr_tensor)
+            pre = model(lr_tensor)
 
         sr_img = utils.tensor2np(pre.detach()[0])
         #print('sr_img_shape :',sr_img.shape)
         gt_img = utils.tensor2np(hr_tensor.detach()[0])
         #print('gt_img_shape :',gt_img.shape)
         crop_size = args.scale
-        cropped_sr_img = utils.shave(sr_img, crop_size)
-        cropped_gt_img = utils.shave(gt_img, crop_size)
+        # cropped_sr_img = utils.shave(sr_img, crop_size)
+        # cropped_gt_img = utils.shave(gt_img, crop_size)
+        cropped_sr_img = sr_img
+        cropped_gt_img = gt_img
         if args.isY is False:
             im_label = utils.quantize(sc.rgb2ycbcr(cropped_gt_img)[:, :, 0])
             im_pre = utils.quantize(sc.rgb2ycbcr(cropped_sr_img)[:, :, 0])
@@ -224,9 +233,9 @@ def valid(scale):
             im_pre = cropped_sr_img
         #print('im_pre :',im_pre.shape)
         #print('im_label :',im_label.shape)
-        avg_psnr += utils.compute_psnr(im_pre, im_label)
-        avg_ssim += utils.compute_ssim(im_pre, im_label)
-    print("===> Valid. psnr: {:.4f}, ssim: {:.4f}".format(avg_psnr / len(testing_data_loader), avg_ssim / len(testing_data_loader)))
+        #avg_psnr += utils.compute_psnr(im_pre, im_label)
+        #avg_ssim += utils.compute_ssim(im_pre, im_label)
+    #print("===> Valid. psnr: {:.4f}, ssim: {:.4f}".format(avg_psnr / len(testing_data_loader), avg_ssim / len(testing_data_loader)))
 
 
 def save_checkpoint(epoch):
@@ -248,11 +257,13 @@ print("===> Training")
 print_network(model)
 code_start = datetime.datetime.now()
 timer = utils.Timer()
+loss_L1=[]
 for epoch in range(args.start_epoch, args.nEpochs + 1):
     t_epoch_start = timer.t()
     epoch_start = datetime.datetime.now()
     valid(args.scale)
     train(epoch)
+
     if epoch%10==0:
         save_checkpoint(epoch)
     epoch_end = datetime.datetime.now()
@@ -262,5 +273,9 @@ for epoch in range(args.start_epoch, args.nEpochs + 1):
     t_epoch = utils.time_text(t - t_epoch_start)
     t_elapsed, t_all = utils.time_text(t), utils.time_text(t / prog)
     print('{} {}/{}'.format(t_epoch, t_elapsed, t_all))
+    
+
+with open('losses.pkl', 'wb') as f:
+    pickle.dump(loss_L1, f)
 code_end = datetime.datetime.now()
 print('Code cost times: %s' % str(code_end-code_start))
