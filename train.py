@@ -39,7 +39,7 @@ parser.add_argument("--threads", type=int, default=8,
                     help="number of threads for data loading")
 parser.add_argument("--root", type=str, default="./dataset/",
                     help='dataset directory')
-parser.add_argument("--n_train", type=int, default=160,
+parser.add_argument("--n_train", type=int, default=100,
                     help="number of training set")
 parser.add_argument("--n_val", type=int, default=1,
                     help="number of validation set")
