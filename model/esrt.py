@@ -199,6 +199,7 @@ class ESRT(nn.Module):
         self.body = nn.Sequential(*modules_body)
         self.tail = nn.Sequential(*modules_tail)
         self.reduce = conv(n_blocks*n_feats, n_feats, kernel_size)
+        self.lastConv = nn.Sequential(conv(1, n_channels, kernel_size), nn.Sigmoid())
 
 
     def forward(self, x1,x2 = None, test=False):
@@ -217,6 +218,7 @@ class ESRT(nn.Module):
         x1 = self.tail(res1)
         #print('ESRT result :',x1.shape)
         x1 = self.up(res2) + x1
+        x1 = self.lastConv(x1)
         #print('ESRT result+x1 :',x1.shape)
         # x1 = self.add_mean(x1)
         #x2 = self.tail(res2)

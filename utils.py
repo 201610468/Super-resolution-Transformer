@@ -66,11 +66,12 @@ def quantize(img):
     return img.clip(0, 255).round().astype(np.uint8)
 
 
-def tensor2np(tensor, out_type=np.uint8, min_max=(0, 1)):
-    tensor = tensor.float().cpu().clamp_(*min_max)
-    tensor = (tensor - min_max[0]) / (min_max[1] - min_max[0])  # to range [0, 1]
+def tensor2np(tensor, out_type=np.float32, min_max=(0, 1)):
+    tensor = tensor.float().cpu()#.clamp_(*min_max)
+    #tensor = (tensor - tensor.min()) / (tensor.max() - tensor.min())  # to range [0, 1]
     img_np = tensor.numpy()
     img_np = np.transpose(img_np, (1, 2, 0))
+    #print(img_np)
     if out_type == np.uint8:
         img_np = (img_np * 255.0).round()
 
